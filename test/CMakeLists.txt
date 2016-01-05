@@ -1,0 +1,15 @@
+
+FILE(GLOB SRCS *.cpp)
+FILE(GLOB HDRS *.h)
+SOURCE_GROUP("" FILES ${SRCS} ${HDRS})
+
+INCLUDE_DIRECTORIES(
+)
+
+ADD_EXECUTABLE(threadutiltest
+	${SRCS}
+	${HDRS}
+)
+
+TARGET_LINK_LIBRARIES(threadutiltest
+)
