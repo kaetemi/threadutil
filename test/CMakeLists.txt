@@ -1,6 +1,6 @@
 
 FILE(GLOB SRCS *.cpp)
-FILE(GLOB HDRS *.h)
+FILE(GLOB HDRS *.h ../threadutil/*.h)
 SOURCE_GROUP("" FILES ${SRCS} ${HDRS})
 
 INCLUDE_DIRECTORIES(

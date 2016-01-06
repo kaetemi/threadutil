@@ -127,43 +127,6 @@ private:
 	}
 
 private:
-	struct parallel_state
-	{
-		std::function<void()> callback;
-		int remaining;
-	};
-
-	template<typename Tf>
-	inline void parallelsub(std::shared_ptr<parallel_state> state, Tf f)
-	{
-		if (state->remaining)
-			state->callback = f;
-		else if (!state->callback)
-			f();
-	}
-
-	template<typename Tf, typename... Tfv>
-	inline void parallelsub(std::shared_ptr<parallel_state> state, Tf f, Tfv... fv)
-	{
-		++state->remaining;
-		f([state]() -> void {
-			--state->remaining;
-			if (!state->remaining && state->callback)
-				state->callback();
-		});
-		parallelsub(state, fv...);
-	}
-
-public:
-	template<typename... Tfv>
-	void parallel(Tfv... fv) // only call from event loop itself
-	{
-		std::shared_ptr<parallel_state> state = std::shared_ptr<parallel_state>(new parallel_state());
-		state->remaining = 0;
-		parallelsub(state, fv...);
-	}
-
-private:
 	struct timeout_func
 	{
 		std::function<void()> f;
