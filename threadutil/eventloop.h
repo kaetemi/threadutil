@@ -26,6 +26,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 */
 
+#ifndef THREADUTIL_EVENTLOOP_H
+#define THREADUTIL_EVENTLOOP_H
+
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -232,5 +235,7 @@ private:
 	int m_Handle;
 
 };
+
+#endif /* THREADUTIL_EVENTLOOP_H */
 
 /* end of file */
