@@ -58,7 +58,7 @@ int main()
 	e.timeout([]() -> void {
 		printf("1\n");
 	}, std::chrono::milliseconds(1000));
-	e.timeout([]() -> void {
+	int three = e.timeout([]() -> void {
 		printf("3\n");
 	}, std::chrono::milliseconds(3000));
 	e.timeout([]() -> void {
@@ -67,6 +67,8 @@ int main()
 	e.timeout([]() -> void {
 		printf("4\n");
 	}, std::chrono::milliseconds(4000));
+
+	e.clear(three);
 
 	AsyncParallel ap(e);
 	ap.call([&e](std::function<void()> callback) -> void {
