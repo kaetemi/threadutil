@@ -70,7 +70,7 @@ public:
 	inline void defer(TFunc f)
 	{
 		++m_Remaining;
-		m_EventLoop.setImmediate([this, f]() -> void {
+		m_EventLoop.immediate([this, f]() -> void {
 			f([this]() -> void {
 				--m_Remaining;
 				if (!m_Remaining && m_Completed)

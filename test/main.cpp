@@ -6,7 +6,7 @@
 void sum(EventLoop *e, int x, int y, std::function<void(char *err, int res)> callback)
 {
 	int r = x + y;
-	e->setImmediate([=]() -> void {
+	e->immediate([=]() -> void {
 		callback(NULL, r);
 	});
 }
@@ -15,7 +15,7 @@ int main()
 {
 	EventLoop e;
 
-	e.setImmediate([&e]() -> void {
+	e.immediate([&e]() -> void {
 		sum(&e, 50, 60, [](char *err, int res) -> void {
 			printf("sum: %i\n", res);
 		});
@@ -36,7 +36,7 @@ int main()
 				printf("a2\n");
 			}, callback);*/
 			printf("a1\n");
-			e.setTimeout([callback]() -> void {
+			e.timeout([callback]() -> void {
 				printf("a2\n");
 				callback();
 			}, std::chrono::milliseconds(1000));
@@ -52,19 +52,19 @@ int main()
 		return;
 	});
 
-	e.setTimeout([]() -> void {
+	e.timeout([]() -> void {
 		printf("5\n");
 	}, std::chrono::milliseconds(5000));
-	e.setTimeout([]() -> void {
+	e.timeout([]() -> void {
 		printf("1\n");
 	}, std::chrono::milliseconds(1000));
-	e.setTimeout([]() -> void {
+	e.timeout([]() -> void {
 		printf("3\n");
 	}, std::chrono::milliseconds(3000));
-	e.setTimeout([]() -> void {
+	e.timeout([]() -> void {
 		printf("2\n");
 	}, std::chrono::milliseconds(2000));
-	e.setTimeout([]() -> void {
+	e.timeout([]() -> void {
 		printf("4\n");
 	}, std::chrono::milliseconds(4000));
 
@@ -74,7 +74,7 @@ int main()
 			printf("ccca1\n");
 			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 			printf("ccca2\n");
-			e.setImmediate(callback);
+			e.immediate(callback);
 		});
 		thread.detach();
 	});
@@ -83,7 +83,7 @@ int main()
 			printf("cccb1\n");
 			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 			printf("cccb2\n");
-			e.setImmediate(callback);
+			e.immediate(callback);
 		});
 		thread.detach();
 	});

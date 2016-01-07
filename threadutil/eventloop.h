@@ -6,11 +6,12 @@
 #include <functional>
 
 #include <queue>
+#include <set>
 
 class EventLoop
 {
 public:
-	EventLoop() : m_Running(false)
+	EventLoop() : m_Running(false), m_Handle(0)
 	{
 		
 	}
@@ -38,8 +39,22 @@ public:
 		m_Running = false;
 	}
 
+	void clear() // thread-safe
+	{
+		std::unique_lock<std::mutex> lock(m_QueueLock);
+		std::unique_lock<std::mutex> tlock(m_QueueTimeoutLock);
+		m_Immediate = std::move(std::queue<std::function<void()>>());
+		m_Timeout = std::move(std::priority_queue<timeout_func>());
+	}
+
+	void clear(int handle) // thread-safe
+	{
+		std::unique_lock<std::mutex> lock(m_QueueTimeoutLock);
+		m_ClearTimeout.insert(handle);
+	}
+
 public:
-	void setImmediate(std::function<void()> f) // thread-safe
+	void immediate(std::function<void()> f) // thread-safe
 	{
 		std::unique_lock<std::mutex> lock(m_QueueLock);
 		m_Immediate.push(f);
@@ -47,16 +62,35 @@ public:
 	}
 
 	template<class rep, class period>
-	void setTimeout(std::function<void()> f, const std::chrono::duration<rep, period>& time) // thread-safe
+	int timeout(std::function<void()> f, const std::chrono::duration<rep, period>& delta) // thread-safe
 	{
 		timeout_func tf;
 		tf.f = f;
-		tf.time = std::chrono::steady_clock::now() + time;
+		tf.time = std::chrono::steady_clock::now() + delta;
+		tf.interval = std::chrono::nanoseconds::zero();
+		tf.handle = ++m_Handle;
 		; {
 			std::unique_lock<std::mutex> lock(m_QueueTimeoutLock);
 			m_Timeout.push(tf);
 			poke();
 		}
+		return tf.handle;
+	}
+
+	template<class rep, class period>
+	int interval(std::function<void()> f, const std::chrono::duration<rep, period>& interval) // thread-safe
+	{
+		timeout_func tf;
+		tf.f = f;
+		tf.time = std::chrono::steady_clock::now() + interval;
+		tf.interval = interval;
+		tf.handle = ++m_Handle;
+		; {
+			std::unique_lock<std::mutex> lock(m_QueueTimeoutLock);
+			m_Timeout.push(tf);
+			poke();
+		}
+		return tf.handle;
 	}
 
 public:
@@ -64,7 +98,7 @@ public:
 	{
 		std::thread t([this, f, callback]() -> void {
 			f();
-			setImmediate(callback);
+			immediate(callback);
 		});
 		t.detach();
 	}
@@ -97,20 +131,35 @@ private:
 					m_QueueTimeoutLock.unlock();
 					break;
 				}
-				timeout_func tf = m_Timeout.top();
-				if (tf.time > std::chrono::steady_clock::now())
+				const timeout_func &tfr = m_Timeout.top();
+				if (tfr.time > std::chrono::steady_clock::now()) // wait
 				{
 					m_QueueTimeoutLock.unlock();
 					; {
 						std::unique_lock<std::mutex> lock(m_PokeLock);
-						m_PokeCond.wait_until(lock, tf.time);
+						m_PokeCond.wait_until(lock, tfr.time);
 					}
 					poked = true;
 					break;
 				}
+				timeout_func tf = tfr;
 				m_Timeout.pop();
+				if (!m_ClearTimeout.empty() && m_ClearTimeout.find(tf.handle) != m_ClearTimeout.end()) // clear
+				{
+					m_QueueTimeoutLock.unlock();
+					continue;
+				}
 				m_QueueTimeoutLock.unlock();
-				tf.f();
+				tf.f(); // call
+				if (tf.interval > std::chrono::nanoseconds::zero()) // repeat
+				{
+					tf.time += tf.interval;
+					; {
+						std::unique_lock<std::mutex> lock(m_QueueTimeoutLock);
+						m_Timeout.push(tf);
+						poke();
+					}
+				}
 			}
 
 			if (!poked)
@@ -131,6 +180,8 @@ private:
 	{
 		std::function<void()> f;
 		std::chrono::steady_clock::time_point time;
+		std::chrono::nanoseconds interval;
+		int handle;
 
 		bool operator <(const timeout_func &o) const
 		{
@@ -148,6 +199,8 @@ private:
 	std::queue<std::function<void()>> m_Immediate;
 	std::mutex m_QueueTimeoutLock;
 	std::priority_queue<timeout_func> m_Timeout;
+	std::set<int> m_ClearTimeout;
+	int m_Handle;
 
 };
 
