@@ -64,8 +64,9 @@ int main()
 	e.timeout([]() -> void {
 		printf("2\n");
 	}, std::chrono::milliseconds(2000));
-	e.timeout([]() -> void {
+	e.timeout([&e]() -> void {
 		printf("4\n");
+		e.stop();
 	}, std::chrono::milliseconds(4000));
 
 	e.clear(three);
