@@ -1,6 +1,6 @@
 /*
 
-Copyright (C) 2015  by authors
+Copyright (C) 2016  by authors
 Author: Jan Boon <jan.boon@kaetemi.be>
 All rights reserved.
 
