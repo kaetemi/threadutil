@@ -49,17 +49,19 @@ public:
 	~EventLoop()
 	{
 		stop();
+		clear();
 	}
 
 	void run()
 	{
+		stop();
 		m_Running = true;
-		std::thread t(&EventLoop::loop, this);
-		t.detach();
+		m_Thread = std::thread(&EventLoop::loop, this);
 	}
 
 	void runSync()
 	{
+		stop();
 		m_Running = true;
 		loop();
 	}
@@ -67,6 +69,8 @@ public:
 	void stop() // thread-safe
 	{
 		m_Running = false;
+		if (m_Thread.joinable())
+			m_Thread.join();
 	}
 
 	void clear() // thread-safe
@@ -75,13 +79,19 @@ public:
 		std::unique_lock<std::mutex> tlock(m_QueueTimeoutLock);
 		m_Immediate = std::move(std::queue<std::function<void()>>());
 		m_Timeout = std::move(std::priority_queue<timeout_func>());
-		m_ClearTimeout.clear();
 	}
 
-	void clear(int handle) // thread-safe, not recommended nor reliable to do this for timeouts, only reliable for intervals
+	void clear(int handle) // thread-safe, relatively slow, not recommended nor reliable to do this for timeouts, only reliable for intervals
 	{
 		std::unique_lock<std::mutex> lock(m_QueueTimeoutLock);
-		m_ClearTimeout.insert(handle);
+		std::priority_queue<timeout_func> timeout;
+		while (m_Timeout.size())
+		{
+			if (m_Timeout.top().handle != handle)
+				timeout.push(m_Timeout.top());
+			m_Timeout.pop();
+		}
+		m_Timeout = std::move(timeout);
 	}
 
 public:
@@ -115,6 +125,21 @@ public:
 		tf.f = f;
 		tf.time = std::chrono::steady_clock::now() + interval;
 		tf.interval = interval;
+		tf.handle = ++m_Handle;
+		; {
+			std::unique_lock<std::mutex> lock(m_QueueTimeoutLock);
+			m_Timeout.push(tf);
+			poke();
+		}
+		return tf.handle;
+	}
+
+	int timed(std::function<void()> f, const std::chrono::steady_clock::time_point &point) // thread-safe
+	{
+		timeout_func tf;
+		tf.f = f;
+		tf.time = point;
+		tf.interval = std::chrono::nanoseconds::zero();
 		tf.handle = ++m_Handle;
 		; {
 			std::unique_lock<std::mutex> lock(m_QueueTimeoutLock);
@@ -175,12 +200,6 @@ private:
 				}
 				timeout_func tf = tfr;
 				m_Timeout.pop();
-				if (!m_ClearTimeout.empty() && m_ClearTimeout.find(tf.handle) != m_ClearTimeout.end()) // clear
-				{
-					m_ClearTimeout.erase(tf.handle); // fixme: when the event was already called, the handle is never erased - count diff between handle and queue maybe
-					m_QueueTimeoutLock.unlock();
-					continue;
-				}
 				m_QueueTimeoutLock.unlock();
 				tf.f(); // call
 				if (tf.interval > std::chrono::nanoseconds::zero()) // repeat
@@ -224,6 +243,7 @@ private:
 
 private:
 	volatile bool m_Running;
+	std::thread m_Thread;
 	std::mutex m_PokeLock;
 	std::condition_variable m_PokeCond;
 
@@ -231,7 +251,6 @@ private:
 	std::queue<std::function<void()>> m_Immediate;
 	std::mutex m_QueueTimeoutLock;
 	std::priority_queue<timeout_func> m_Timeout;
-	std::set<int> m_ClearTimeout;
 	int m_Handle;
 
 };
