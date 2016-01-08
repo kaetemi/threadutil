@@ -43,7 +43,7 @@ class EventLoop
 public:
 	EventLoop() : m_Running(false), m_Handle(0)
 	{
-		
+
 	}
 
 	~EventLoop()
@@ -94,6 +94,17 @@ public:
 		m_Timeout = std::move(timeout);
 	}
 
+	void join() // thread-safe
+	{
+		std::mutex syncLock;
+		std::condition_variable syncCond;
+		std::unique_lock<std::mutex> lock(syncLock);
+		immediate([this, &syncCond]() -> void {
+			syncCond.notify_one();
+		});
+		m_PokeCond.wait(lock);
+	}
+
 public:
 	void immediate(std::function<void()> f) // thread-safe
 	{
@@ -139,7 +150,7 @@ public:
 		timeout_func tf;
 		tf.f = f;
 		tf.time = point;
-		tf.interval = std::chrono::nanoseconds::zero();
+		tf.interval = std::chrono::steady_clock::duration::zero();
 		tf.handle = ++m_Handle;
 		; {
 			std::unique_lock<std::mutex> lock(m_QueueTimeoutLock);
@@ -231,7 +242,7 @@ private:
 	{
 		std::function<void()> f;
 		std::chrono::steady_clock::time_point time;
-		std::chrono::nanoseconds interval;
+		std::chrono::steady_clock::duration interval;
 		int handle;
 
 		bool operator <(const timeout_func &o) const
