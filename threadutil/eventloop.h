@@ -56,7 +56,7 @@ public:
 	{
 		stop();
 		m_Running = true;
-		m_Thread = std::thread(&EventLoop::loop, this);
+		m_Thread = std::move(std::thread(&EventLoop::loop, this));
 	}
 
 	void runSync()
@@ -69,6 +69,7 @@ public:
 	void stop() // thread-safe
 	{
 		m_Running = false;
+		poke();
 		if (m_Thread.joinable())
 			m_Thread.join();
 	}
@@ -175,6 +176,8 @@ private:
 	{
 		while (m_Running)
 		{
+			m_Poked = false;
+
 			for (;;)
 			{
 				m_QueueLock.lock();
@@ -204,7 +207,8 @@ private:
 					m_QueueTimeoutLock.unlock();
 					; {
 						std::unique_lock<std::mutex> lock(m_PokeLock);
-						m_PokeCond.wait_until(lock, tfr.time);
+						if (!m_Poked)
+							m_PokeCond.wait_until(lock, tfr.time);
 					}
 					poked = true;
 					break;
@@ -227,14 +231,17 @@ private:
 			if (!poked)
 			{
 				std::unique_lock<std::mutex> lock(m_PokeLock);
-				m_PokeCond.wait(lock);
+				if (!m_Poked)
+					m_PokeCond.wait(lock);
 			}
 		}
 	}
 
 	void poke() // private
 	{
+		std::unique_lock<std::mutex> lock(m_PokeLock);
 		m_PokeCond.notify_one();
+		m_Poked = true;
 	}
 
 private:
@@ -254,6 +261,7 @@ private:
 
 private:
 	volatile bool m_Running;
+	volatile bool m_Poked;
 	std::thread m_Thread;
 	std::mutex m_PokeLock;
 	std::condition_variable m_PokeCond;
