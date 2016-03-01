@@ -38,6 +38,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <queue>
 #include <set>
 
+#include "atomic_lock.h"
+
 class EventLoop
 {
 public:
@@ -76,15 +78,15 @@ public:
 
 	void clear() // thread-safe
 	{
-		std::unique_lock<std::mutex> lock(m_QueueLock);
-		std::unique_lock<std::mutex> tlock(m_QueueTimeoutLock);
+		std::unique_lock<AtomicLock> lock(m_QueueLock);
+		std::unique_lock<AtomicLock> tlock(m_QueueTimeoutLock);
 		m_Immediate = std::move(std::queue<std::function<void()>>());
 		m_Timeout = std::move(std::priority_queue<timeout_func>());
 	}
 
 	void clear(int handle) // thread-safe, relatively slow, not recommended nor reliable to do this for timeouts, only reliable for intervals
 	{
-		std::unique_lock<std::mutex> lock(m_QueueTimeoutLock);
+		std::unique_lock<AtomicLock> lock(m_QueueTimeoutLock);
 		std::priority_queue<timeout_func> timeout;
 		while (m_Timeout.size())
 		{
@@ -109,7 +111,7 @@ public:
 public:
 	void immediate(std::function<void()> f) // thread-safe
 	{
-		std::unique_lock<std::mutex> lock(m_QueueLock);
+		std::unique_lock<AtomicLock> lock(m_QueueLock);
 		m_Immediate.push(f);
 		poke();
 	}
@@ -123,7 +125,7 @@ public:
 		tf.interval = std::chrono::nanoseconds::zero();
 		tf.handle = ++m_Handle;
 		; {
-			std::unique_lock<std::mutex> lock(m_QueueTimeoutLock);
+			std::unique_lock<AtomicLock> lock(m_QueueTimeoutLock);
 			m_Timeout.push(tf);
 			poke();
 		}
@@ -139,7 +141,7 @@ public:
 		tf.interval = interval;
 		tf.handle = ++m_Handle;
 		; {
-			std::unique_lock<std::mutex> lock(m_QueueTimeoutLock);
+			std::unique_lock<AtomicLock> lock(m_QueueTimeoutLock);
 			m_Timeout.push(tf);
 			poke();
 		}
@@ -154,7 +156,7 @@ public:
 		tf.interval = std::chrono::steady_clock::duration::zero();
 		tf.handle = ++m_Handle;
 		; {
-			std::unique_lock<std::mutex> lock(m_QueueTimeoutLock);
+			std::unique_lock<AtomicLock> lock(m_QueueTimeoutLock);
 			m_Timeout.push(tf);
 			poke();
 		}
@@ -221,7 +223,7 @@ private:
 				{
 					tf.time += tf.interval;
 					; {
-						std::unique_lock<std::mutex> lock(m_QueueTimeoutLock);
+						std::unique_lock<AtomicLock> lock(m_QueueTimeoutLock);
 						m_Timeout.push(tf);
 						poke();
 					}
@@ -266,12 +268,14 @@ private:
 	std::mutex m_PokeLock;
 	std::condition_variable m_PokeCond;
 
-	std::mutex m_QueueLock;
+	AtomicLock m_QueueLock;
 	std::queue<std::function<void()>> m_Immediate;
-	std::mutex m_QueueTimeoutLock;
+	AtomicLock m_QueueTimeoutLock;
 	std::priority_queue<timeout_func> m_Timeout;
 	int m_Handle;
 
+	EventLoop &operator=(const EventLoop&) = delete;
+	EventLoop(const EventLoop&) = delete;
 };
 
 #endif /* THREADUTIL_EVENTLOOP_H */
