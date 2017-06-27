@@ -1,6 +1,6 @@
 /*
 
-Copyright (C) 2016  by authors
+Copyright (C) 2016-2017  by authors
 Author: Jan Boon <jan.boon@kaetemi.be>
 All rights reserved.
 
@@ -26,8 +26,12 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 */
 
-#ifndef THREADUTIL_EVENTLOOP_H
-#define THREADUTIL_EVENTLOOP_H
+#ifndef THREADUTIL_EVENT_LOOP_H
+#define THREADUTIL_EVENT_LOOP_H
+
+#define EVENT_LOOP_CONCURRENT_QUEUE
+#define EVENT_LOOP_WIN32_EVENT
+#define EVENT_LOOP_ATOMIC_LOCK
 
 #include <thread>
 #include <mutex>
@@ -38,20 +42,42 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <queue>
 #include <set>
 
+#ifdef EVENT_LOOP_CONCURRENT_QUEUE
+#include <concurrent_queue.h>
+#include <concurrent_priority_queue.h>
+#else
+#	ifdef EVENT_LOOP_ATOMIC_LOCK
 #include "atomic_lock.h"
+typedef AtomicLock EventLoopLock;
+#	else
+typedef std::mutex EventLoopLock;
+#	endif
+#endif
+
+#ifdef EVENT_LOOP_WIN32_EVENT
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#endif
+
+typedef std::function<void()> EventFunction;
 
 class EventLoop
 {
 public:
-	EventLoop() : m_Running(false), m_Handle(0)
+	EventLoop() : m_Running(false), m_Cancel(false)
 	{
-
+#ifdef EVENT_LOOP_WIN32_EVENT
+		m_PokeEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+#endif
 	}
 
 	~EventLoop()
 	{
 		stop();
 		clear();
+#ifdef EVENT_LOOP_WIN32_EVENT
+		CloseHandle(m_PokeEvent);
+#endif
 	}
 
 	void run()
@@ -76,95 +102,121 @@ public:
 			m_Thread.join();
 	}
 
-	void clear() // thread-safe
+	void clear() // semi-thread-safe
 	{
-		std::unique_lock<AtomicLock> lock(m_QueueLock);
-		std::unique_lock<AtomicLock> tlock(m_QueueTimeoutLock);
-		m_Immediate = std::move(std::queue<std::function<void()>>());
+#ifdef EVENT_LOOP_CONCURRENT_QUEUE
+		m_ImmediateConcurrent.clear();
+		m_TimeoutConcurrent.clear();
+#else
+		std::unique_lock<EventLoopLock> lock(m_QueueLock);
+		std::unique_lock<EventLoopLock> tlock(m_QueueTimeoutLock);
+		m_Immediate = std::move(std::queue<EventFunction>());
 		m_Timeout = std::move(std::priority_queue<timeout_func>());
+#endif
 	}
 
-	void clear(int handle) // thread-safe, relatively slow, not recommended nor reliable to do this for timeouts, only reliable for intervals
+	//! Call from inside an interval function to prevent it from being called again
+	void cancel()
 	{
-		std::unique_lock<AtomicLock> lock(m_QueueTimeoutLock);
-		std::priority_queue<timeout_func> timeout;
-		while (m_Timeout.size())
-		{
-			if (m_Timeout.top().handle != handle)
-				timeout.push(m_Timeout.top());
-			m_Timeout.pop();
-		}
-		m_Timeout = std::move(timeout);
+		m_Cancel = true;
 	}
 
-	void join() // thread-safe
+	//! Block call until the queued functions  finished processing. Set empty to repeat the wait until the queue is empty
+	void join(bool empty = false) // thread-safe
 	{
 		std::mutex syncLock;
 		std::condition_variable syncCond;
 		std::unique_lock<std::mutex> lock(syncLock);
-		immediate([this, &syncCond]() -> void {
-			syncCond.notify_one();
-		});
-		m_PokeCond.wait(lock);
+		EventFunction syncFunc = [this, &syncLock, &syncCond, &syncFunc, empty]() -> void {
+#ifdef EVENT_LOOP_CONCURRENT_QUEUE
+			if (empty && !m_ImmediateConcurrent.empty())
+#else
+			bool immediateEmpty;
+			; {
+				std::unique_lock<EventLoopLock> lock(m_QueueLock);
+				immediateEmpty = m_Immediate.empty();
+			}
+			if (empty && !immediateEmpty)
+#endif
+			{
+				immediate(syncFunc);
+			}
+			else
+			{
+				std::unique_lock<std::mutex> lock(syncLock);
+				syncCond.notify_one();
+			}
+		};
+		immediate(syncFunc);
+		syncCond.wait(lock);
 	}
 
 public:
-	void immediate(std::function<void()> f) // thread-safe
+	void immediate(EventFunction f) // thread-safe
 	{
-		std::unique_lock<AtomicLock> lock(m_QueueLock);
+#ifdef EVENT_LOOP_CONCURRENT_QUEUE
+		m_ImmediateConcurrent.push(f);
+#else
+		std::unique_lock<EventLoopLock> lock(m_QueueLock);
 		m_Immediate.push(f);
+#endif
 		poke();
 	}
 
-	template<class rep, class period>
-	int timeout(std::function<void()> f, const std::chrono::duration<rep, period>& delta) // thread-safe
+	template<class rep, class period> void timeout(EventFunction f, const std::chrono::duration<rep, period>& delta) // thread-safe
 	{
 		timeout_func tf;
 		tf.f = f;
 		tf.time = std::chrono::steady_clock::now() + delta;
 		tf.interval = std::chrono::nanoseconds::zero();
-		tf.handle = ++m_Handle;
 		; {
-			std::unique_lock<AtomicLock> lock(m_QueueTimeoutLock);
-			m_Timeout.push(tf);
-			poke();
+#ifdef EVENT_LOOP_CONCURRENT_QUEUE
+			m_TimeoutConcurrent.push(std::move(tf));
+#else
+			std::unique_lock<EventLoopLock> lock(m_QueueTimeoutLock);
+			m_Timeout.push(std::move(tf));
+#endif
 		}
-		return tf.handle;
+		poke();
 	}
 
-	template<class rep, class period>
-	int interval(std::function<void()> f, const std::chrono::duration<rep, period>& interval) // thread-safe
+	template<class rep, class period> void interval(EventFunction f, const std::chrono::duration<rep, period>& interval) // thread-safe
 	{
 		timeout_func tf;
 		tf.f = f;
 		tf.time = std::chrono::steady_clock::now() + interval;
 		tf.interval = interval;
-		tf.handle = ++m_Handle;
 		; {
-			std::unique_lock<AtomicLock> lock(m_QueueTimeoutLock);
-			m_Timeout.push(tf);
-			poke();
+#ifdef EVENT_LOOP_CONCURRENT_QUEUE
+			m_TimeoutConcurrent.push(std::move(tf));
+#else
+			std::unique_lock<EventLoopLock> lock(m_QueueTimeoutLock);
+			m_Timeout.push(std::move(tf));
+#endif
 		}
-		return tf.handle;
+		poke();
 	}
 
-	int timed(std::function<void()> f, const std::chrono::steady_clock::time_point &point) // thread-safe
+
+	void timed(EventFunction f, const std::chrono::steady_clock::time_point &point) // thread-safe
 	{
 		timeout_func tf;
 		tf.f = f;
 		tf.time = point;
 		tf.interval = std::chrono::steady_clock::duration::zero();
-		tf.handle = ++m_Handle;
 		; {
-			std::unique_lock<AtomicLock> lock(m_QueueTimeoutLock);
-			m_Timeout.push(tf);
-			poke();
+#ifdef EVENT_LOOP_CONCURRENT_QUEUE
+			m_TimeoutConcurrent.push(std::move(tf));
+#else
+			std::unique_lock<EventLoopLock> lock(m_QueueTimeoutLock);
+			m_Timeout.push(std::move(tf));
+#endif
 		}
-		return tf.handle;
+		poke();
 	}
 
 public:
-	void thread(std::function<void()> f, std::function<void()> callback)
+	void thread(EventFunction f, EventFunction callback)
 	{
 		std::thread t([this, f, callback]() -> void {
 			f();
@@ -178,25 +230,39 @@ private:
 	{
 		while (m_Running)
 		{
+#ifndef EVENT_LOOP_WIN32_EVENT
 			m_Poked = false;
+#endif
 
 			for (;;)
 			{
+#ifdef EVENT_LOOP_CONCURRENT_QUEUE
+				EventFunction f;
+				if (!m_ImmediateConcurrent.try_pop(f))
+					break;
+#else
 				m_QueueLock.lock();
 				if (!m_Immediate.size())
 				{
 					m_QueueLock.unlock();
 					break;
 				}
-				std::function<void()> f = m_Immediate.front();
+				EventFunction f = m_Immediate.front();
 				m_Immediate.pop();
 				m_QueueLock.unlock();
+#endif
 				f();
 			}
 
 			bool poked = false;
 			for (;;)
 			{
+#ifdef EVENT_LOOP_CONCURRENT_QUEUE
+				timeout_func tf;
+				if (!m_TimeoutConcurrent.try_pop(tf))
+					break;
+				const timeout_func &tfr = tf;
+#else
 				m_QueueTimeoutLock.lock();
 				if (!m_Timeout.size())
 				{
@@ -204,55 +270,83 @@ private:
 					break;
 				}
 				const timeout_func &tfr = m_Timeout.top();
-				if (tfr.time > std::chrono::steady_clock::now()) // wait
+#endif
+				std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+#ifdef EVENT_LOOP_WIN32_EVENT
+				DWORD wt = (DWORD)std::chrono::duration_cast<std::chrono::milliseconds>(tfr.time - now).count();
+				if (tfr.time > now && wt > 0)
+#else
+				if (tfr.time > now) // wait
+#endif
 				{
+#ifdef EVENT_LOOP_CONCURRENT_QUEUE
+					m_TimeoutConcurrent.push(tf);
+#else
 					m_QueueTimeoutLock.unlock();
+#endif
+#ifdef EVENT_LOOP_WIN32_EVENT
+					WaitForSingleObject(m_PokeEvent, wt);
+#else
 					; {
 						std::unique_lock<std::mutex> lock(m_PokeLock);
 						if (!m_Poked)
 							m_PokeCond.wait_until(lock, tfr.time);
 					}
+#endif
 					poked = true;
 					break;
 				}
+#ifndef EVENT_LOOP_CONCURRENT_QUEUE
 				timeout_func tf = tfr;
 				m_Timeout.pop();
 				m_QueueTimeoutLock.unlock();
+#endif
+				m_Cancel = false;
 				tf.f(); // call
-				if (tf.interval > std::chrono::nanoseconds::zero()) // repeat
+				if (!m_Cancel && (tf.interval > std::chrono::nanoseconds::zero())) // repeat
 				{
 					tf.time += tf.interval;
 					; {
-						std::unique_lock<AtomicLock> lock(m_QueueTimeoutLock);
-						m_Timeout.push(tf);
-						poke();
+#ifdef EVENT_LOOP_CONCURRENT_QUEUE
+						m_TimeoutConcurrent.push(std::move(tf));
+#else
+						std::unique_lock<EventLoopLock> lock(m_QueueTimeoutLock);
+						m_Timeout.push(std::move(tf));
+#endif
 					}
 				}
 			}
 
 			if (!poked)
 			{
+#ifdef EVENT_LOOP_WIN32_EVENT
+				WaitForSingleObject(m_PokeEvent, INFINITE);
+#else
 				std::unique_lock<std::mutex> lock(m_PokeLock);
 				if (!m_Poked)
 					m_PokeCond.wait(lock);
+#endif
 			}
 		}
 	}
 
 	void poke() // private
 	{
+#ifdef EVENT_LOOP_WIN32_EVENT
+		SetEvent(m_PokeEvent);
+#else
 		std::unique_lock<std::mutex> lock(m_PokeLock);
 		m_PokeCond.notify_one();
 		m_Poked = true;
+#endif
 	}
 
 private:
 	struct timeout_func
 	{
-		std::function<void()> f;
+		EventFunction f;
 		std::chrono::steady_clock::time_point time;
 		std::chrono::steady_clock::duration interval;
-		int handle;
 
 		bool operator <(const timeout_func &o) const
 		{
@@ -262,22 +356,31 @@ private:
 	};
 
 private:
-	volatile bool m_Running;
+	bool m_Running;
+#ifndef EVENT_LOOP_WIN32_EVENT
 	volatile bool m_Poked;
+#endif
 	std::thread m_Thread;
+#ifndef EVENT_LOOP_WIN32_EVENT
 	std::mutex m_PokeLock;
 	std::condition_variable m_PokeCond;
+#else
+	HANDLE m_PokeEvent;
+#endif
 
-	AtomicLock m_QueueLock;
-	std::queue<std::function<void()>> m_Immediate;
-	AtomicLock m_QueueTimeoutLock;
+#ifdef EVENT_LOOP_CONCURRENT_QUEUE
+	concurrency::concurrent_queue<EventFunction> m_ImmediateConcurrent;
+	concurrency::concurrent_priority_queue<timeout_func> m_TimeoutConcurrent;
+#else
+	EventLoopLock m_QueueLock;
+	std::queue<EventFunction> m_Immediate;
+	EventLoopLock m_QueueTimeoutLock;
 	std::priority_queue<timeout_func> m_Timeout;
-	int m_Handle;
+#endif
+	bool m_Cancel;
 
-	EventLoop &operator=(const EventLoop&) = delete;
-	EventLoop(const EventLoop&) = delete;
 };
 
-#endif /* THREADUTIL_EVENTLOOP_H */
+#endif /* THREADUTIL_EVENT_LOOP_H */
 
 /* end of file */

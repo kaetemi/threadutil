@@ -1,6 +1,6 @@
 /*
 
-Copyright (C) 2016-2017  by authors
+Copyright (C) 2017  by authors
 Author: Jan Boon <jan.boon@kaetemi.be>
 All rights reserved.
 
@@ -26,44 +26,78 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 */
 
-#ifndef THREADUTIL_ATOMIC_LOCK_H
-#define THREADUTIL_ATOMIC_LOCK_H
+#ifndef THREADUTIL_ATOMIC_RW_LOCK_H
+#define THREADUTIL_ATOMIC_RW_LOCK_H
 
 #include <atomic>
 #include <thread>
 
-class AtomicLock
+//! Lock allowing one writer and multiple readers
+class AtomicRWLock
 {
 public:
-	inline void lock()
+	inline bool tryLockWrite()
 	{
-		while (m_Atomic.test_and_set())
+		if (m_Writing.exchange(true))
+			return false; // Already locked for write
+		if (m_Reading) // Successfully locked for write, but busy read
+		{
+			m_Writing.exchange(false); // Unlock write
+			return false; // Already busy for read
+		}
+		return true; // Successfully locked for write and read
+	}
+
+	inline void lockWrite()
+	{
+		while (m_Writing.exchange(true))
+			std::this_thread::yield();
+		while (m_Reading)
 			std::this_thread::yield();
 	}
 
-	inline bool try_lock()
+	inline void unlockWrite()
 	{
-		return !m_Atomic.test_and_set();
+		m_Writing.exchange(false);
 	}
 
-	inline bool tryLock()
+	inline bool tryLockRead()
 	{
-		return try_lock();
+		++m_Reading;
+		if (m_Writing)
+		{
+			--m_Reading;
+			return false;
+		}
+		return true;
 	}
 
-	inline void unlock()
+	inline void lockRead()
 	{
-		m_Atomic.clear();
+		++m_Reading;
+		if (m_Writing)
+		{
+			--m_Reading;
+			while (m_Writing)
+				std::this_thread::yield();
+			++m_Reading;
+		}
+	}
+
+	inline void unlockRead()
+	{
+		--m_Reading;
 	}
 
 private:
-	std::atomic_flag m_Atomic;
+	std::atomic_bool m_Writing = false;
+	std::atomic_int m_Reading = 0;
 
-	AtomicLock &operator=(const AtomicLock&) = delete;
-	AtomicLock(const AtomicLock&) = delete;
+	AtomicRWLock &operator=(const AtomicRWLock&) = delete;
+	AtomicRWLock(const AtomicRWLock&) = delete;
 
 };
 
-#endif /* THREADUTIL_ATOMIC_LOCK_H */
+#endif /* THREADUTIL_ATOMIC_RW_LOCK_H */
 
 /* end of file */

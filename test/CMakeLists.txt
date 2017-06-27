@@ -1,5 +1,5 @@
 
-FILE(GLOB SRCS *.cpp)
+FILE(GLOB SRCS *.cpp ../threadutil/*.cpp)
 FILE(GLOB HDRS *.h ../threadutil/*.h)
 SOURCE_GROUP("" FILES ${SRCS} ${HDRS})
 

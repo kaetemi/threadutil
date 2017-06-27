@@ -1,6 +1,6 @@
 #include <stdio.h>
 
-#include <threadutil/eventloop.h>
+#include <threadutil/event_loop.h>
 #include <threadutil/async.h>
 
 void sum(EventLoop *e, int x, int y, std::function<void(char *err, int res)> callback)
@@ -52,13 +52,18 @@ int main()
 		return;
 	});
 
+	e.interval([&e]() -> void {
+		printf("once\n");
+		e.cancel();
+	}, std::chrono::milliseconds(500));
+
 	e.timeout([]() -> void {
 		printf("5\n");
 	}, std::chrono::milliseconds(5000));
 	e.timeout([]() -> void {
 		printf("1\n");
 	}, std::chrono::milliseconds(1000));
-	int three = e.timeout([]() -> void {
+	/* int three = */ e.timeout([]() -> void {
 		printf("3\n");
 	}, std::chrono::milliseconds(3000));
 	e.timeout([]() -> void {
@@ -69,7 +74,7 @@ int main()
 		e.stop();
 	}, std::chrono::milliseconds(4000));
 
-	e.clear(three);
+	// e.clear(three);
 
 	AsyncParallel ap(e);
 	ap.call([&e](std::function<void()> callback) -> void {

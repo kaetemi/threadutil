@@ -26,44 +26,51 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 */
 
-#ifndef THREADUTIL_ATOMIC_LOCK_H
-#define THREADUTIL_ATOMIC_LOCK_H
+#ifndef THREADUTIL_ASYNC_LOCK_H
+#define THREADUTIL_ASYNC_LOCK_H
 
 #include <atomic>
-#include <thread>
+#include <concurrent_queue.h>
 
-class AtomicLock
+#include "event_receiver.h"
+
+//! Asynchronous locking mechanism which puts the provided function into the event loop as soon as the lock is available
+class AsyncLock
 {
 public:
-	inline void lock()
+	inline void lock(const EventReceiver *receiver, EventFunction f)
 	{
-		while (m_Atomic.test_and_set())
-			std::this_thread::yield();
-	}
-
-	inline bool try_lock()
-	{
-		return !m_Atomic.test_and_set();
-	}
-
-	inline bool tryLock()
-	{
-		return try_lock();
+		m_Queue.push(EventReceiverFunction(receiver, f));
+		progress();
 	}
 
 	inline void unlock()
 	{
 		m_Atomic.clear();
+		progress();
 	}
 
 private:
-	std::atomic_flag m_Atomic;
+	inline void progress()
+	{
+		if (!m_Atomic.test_and_set())
+		{
+			EventReceiverFunction f;
+			if (m_Queue.try_pop(f))
+				f.immediate();
+			else
+				m_Atomic.clear();
+		}
+	}
 
-	AtomicLock &operator=(const AtomicLock&) = delete;
-	AtomicLock(const AtomicLock&) = delete;
+	std::atomic_flag m_Atomic;
+	concurrency::concurrent_queue<EventReceiverFunction> m_Queue;
+
+	AsyncLock &operator=(const AsyncLock&) = delete;
+	AsyncLock(const AsyncLock&) = delete;
 
 };
 
-#endif /* THREADUTIL_ATOMIC_LOCK_H */
+#endif /* THREADUTIL_ASYNC_LOCK_H */
 
 /* end of file */
