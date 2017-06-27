@@ -64,7 +64,13 @@ private:
 			if (m_Queue.try_pop(f))
 				f.immediate();
 			else
+			{
 				m_Atomic.clear();
+				if (!m_Queue.empty())
+				{
+					progress();
+				}
+			}
 		}
 	}
 
