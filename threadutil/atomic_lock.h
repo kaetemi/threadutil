@@ -35,6 +35,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 class AtomicLock
 {
 public:
+	inline AtomicLock()
+	{
+		m_Atomic.clear();
+	}
+
 	inline void lock()
 	{
 		while (m_Atomic.test_and_set())

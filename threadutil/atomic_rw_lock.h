@@ -36,6 +36,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 class AtomicRWLock
 {
 public:
+	inline AtomicRWLock() : m_Writing(false), m_Reading(0)
+	{
+
+	}
+
 	inline bool tryLockWrite()
 	{
 		if (m_Writing.exchange(true))
@@ -75,7 +80,7 @@ public:
 	inline void lockRead()
 	{
 		++m_Reading;
-		if (m_Writing)
+		while (m_Writing)
 		{
 			--m_Reading;
 			while (m_Writing)
@@ -90,8 +95,8 @@ public:
 	}
 
 private:
-	std::atomic_bool m_Writing = false;
-	std::atomic_int m_Reading = 0;
+	std::atomic_bool m_Writing;
+	std::atomic_int m_Reading;
 
 	AtomicRWLock &operator=(const AtomicRWLock&) = delete;
 	AtomicRWLock(const AtomicRWLock&) = delete;

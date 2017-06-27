@@ -38,6 +38,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 class AsyncLock
 {
 public:
+	inline AsyncLock()
+	{
+		m_Atomic.clear();
+	}
+
 	inline void lock(const EventReceiver *receiver, EventFunction f)
 	{
 		m_Queue.push(EventReceiverFunction(receiver, f));

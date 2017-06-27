@@ -38,21 +38,75 @@ public:
 	inline bool alive() const { return m_Data && m_Data->Alive; }
 	inline operator bool() const { return alive(); }
 	inline EventLoop *eventLoop() const { return m_Data->EventLoop; }
-	inline void immediate(const std::function<void()> &f) { if (alive()) eventLoop()->immediate(f); }
+	inline bool immediate(const std::function<void()> &f) const { if (alive()) { eventLoop()->immediate(f); return true; } return false; }
 
 private:
 	friend class EventReceiver;
 
 	struct Data
 	{
+	public:
+		Data(EventLoop *loop) : Alive(true), EventLoop(loop) { }
 		bool Alive;
 		EventLoop *EventLoop;
 	};
 
-	inline EventReceiverHandle(EventLoop *loop) : m_Data((Data){true, loop}) { }
+	inline EventReceiverHandle(EventLoop *loop) : m_Data(new Data(loop)) { }
 	inline void p_destroyed() { m_Data->Alive = false; }
+	inline void p_invalidate() { m_Data.reset(); }
+	inline void p_init(EventLoop *loop) { m_Data = std::shared_ptr<Data>(new Data(loop)); }
 
 	std::shared_ptr<Data> m_Data;
+
+};
+
+//! The purpose of event receiver is to have a way to callback while keeping in mind the lifetime of the response object
+class EventReceiver
+{
+public:
+	EventReceiver(EventLoop *loop) : m_Handle(loop)
+	{
+
+	}
+
+	~EventReceiver()
+	{
+		m_Handle.p_destroyed(); 
+	}
+
+	inline const EventReceiverHandle &eventReceiverHandle() const { return m_Handle; }
+	inline EventLoop *eventLoop() const { return m_Handle.m_Data->EventLoop; }
+
+	EventReceiver(const EventReceiver &other)
+	{
+		m_Handle.p_init(other.eventLoop());
+	}
+
+	EventReceiver &operator=(const EventReceiver &other)
+	{
+		if (this != &other)
+			m_Handle.p_init(other.eventLoop());
+		return *this;
+	}
+
+	EventReceiver(EventReceiver &&other)
+	{
+		m_Handle = other.m_Handle;
+		other.m_Handle.p_invalidate();
+	}
+
+	EventReceiver &operator=(EventReceiver &&other)
+	{
+		if (this != &other)
+		{
+			m_Handle = other.m_Handle;
+			other.m_Handle.p_invalidate();
+		}
+		return *this;
+	}
+
+private:
+	EventReceiverHandle m_Handle;
 
 };
 
@@ -61,7 +115,7 @@ struct EventReceiverFunction
 public:
 	inline EventReceiverFunction() { }
 	inline EventReceiverFunction(const EventReceiver *receiver, const EventFunction &f) : m_Handle(receiver->eventReceiverHandle()), m_Function(f) { }
-	inline void immediate() { m_Handle.immediate(m_Function); }
+	inline void immediate() const { m_Handle.immediate(m_Function); }
 
 private:
 	EventReceiverHandle m_Handle;
@@ -69,16 +123,60 @@ private:
 
 };
 
-class EventReceiver
+#include "atomic_lock.h"
+
+template<typename ... TParams>
+struct EventCallbackFunction
 {
 public:
-	EventReceiver(EventLoop *loop) : m_Handle(loop) { }
-	~EventReceiver() { m_Handle.p_destroyed(); }
-	inline const EventReceiverHandle &eventReceiverHandle() const { return m_Handle; }
-	inline EventLoop *eventLoop() const { return m_Handle.m_Data->EventLoop; }
+	typedef std::function<void(TParams ...)> FunctionType;
+
+	inline EventCallbackFunction() { }
+	inline EventCallbackFunction(const EventReceiver *receiver, const FunctionType &f) : m_Handle(receiver->eventReceiverHandle()), m_Function(f) { }
+	inline bool immediate(TParams ... args) const { return m_Handle.immediate([=]() -> void { m_Function(args ...); }); }
 
 private:
 	EventReceiverHandle m_Handle;
+	FunctionType m_Function;
+
+};
+
+template<class TFriend, typename ... TParams>
+struct EventCallback
+{
+private:
+	friend TFriend;
+	typedef EventCallbackFunction<TParams ...> CallbackType;
+
+public:
+	typedef typename CallbackType::FunctionType FunctionType;
+	inline EventCallback() { }
+
+	void operator() (EventReceiver *receiver, FunctionType f)
+	{
+		m_Lock.lock();
+		m_Callbacks.push_back(CallbackType(receiver, f));
+		m_Lock.unlock();
+	}
+
+private:
+	void operator() (TParams ... args)
+	{
+		m_Lock.lock();
+		for (int i = 0; i < m_Callbacks.size(); ++i)
+		{
+			const CallbackType &cb = m_Callbacks[i];
+			if (!cb.immediate(args ...))
+			{
+				m_Callbacks.erase(m_Callbacks.begin() + i);
+				--i;
+			}
+		}
+		m_Lock.unlock();
+	}
+
+	AtomicLock m_Lock;
+	std::vector<CallbackType> m_Callbacks;
 
 };
 
