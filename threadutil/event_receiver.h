@@ -46,9 +46,9 @@ private:
 	struct Data
 	{
 	public:
-		Data(EventLoop *loop) : Alive(true), EventLoop(loop) { }
+		Data(::EventLoop *loop) : Alive(true), EventLoop(loop) { }
 		bool Alive;
-		EventLoop *EventLoop;
+		::EventLoop *EventLoop;
 	};
 
 	inline EventReceiverHandle(EventLoop *loop) : m_Data(new Data(loop)) { }

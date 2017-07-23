@@ -78,7 +78,7 @@ public:
 					m_Completed();
 					m_Completed = std::function<void()>();
 				}
-			})
+			});
 		});
 	}
 

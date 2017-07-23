@@ -11,6 +11,8 @@ IF (POLICY CMP0020)
 	CMAKE_POLICY(SET CMP0020 NEW)
 ENDIF ()
 
+SET(CMAKE_CXX_STANDARD 11)
+
 
 ########################################################################
 # Ensure that we are not building in our source directories.
