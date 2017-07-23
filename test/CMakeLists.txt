@@ -12,4 +12,5 @@ ADD_EXECUTABLE(threadutiltest
 )
 
 TARGET_LINK_LIBRARIES(threadutiltest
+pthread
 )

@@ -74,6 +74,8 @@ public:
 		m_Handle.p_destroyed(); 
 	}
 
+	inline const EventReceiver *eventReceiver() const { return this; }
+	inline EventReceiver *eventReceiver() { return this; }
 	inline const EventReceiverHandle &eventReceiverHandle() const { return m_Handle; }
 	inline EventLoop *eventLoop() const { return m_Handle.m_Data->EventLoop; }
 

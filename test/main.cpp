@@ -111,7 +111,7 @@ int main()
 	}, std::chrono::milliseconds(2000));
 	e.timeout([&e]() -> void {
 		printf("4\n");
-		// e.stop();
+		e.stop();
 	}, std::chrono::milliseconds(4000));
 
 	// e.clear(three);
